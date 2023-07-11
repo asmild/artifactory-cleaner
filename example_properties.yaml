@@ -1,0 +1,41 @@
+cleanup:
+  repositories:
+    release:
+      name: libs-release-local
+      cleanVersionPattern: "\\d+\\.\\d+\\.\\d+(?:[-\\.]RELEASE)?"
+      pathMatcher: "*example*"
+      discriminator: "*conf.zip"
+      recentArtifactRetention: 5
+      lastDownloadedDays: 180
+      whitelistedGroups: [com/example/internal/example-artifact]
+      whitelistedVersions: []
+    snapshot:
+      name: libs-snapshot-local
+      cleanVersionPattern: "\\d+\\.\\d+\\.\\d+(?:[-\\.]SNAPSHOT)?"
+      pathMatcher: "*example*"
+      discriminator: "*.pom"
+      recentArtifactRetention: 3
+      lastDownloadedDays: 7
+      whitelistedGroups: [com/example/internal/example-artifact]
+      whitelistedVersions: []
+      whitelistedArtifacts: []
+    docker:
+      name: docker-local
+      cleanVersionPattern: "\\d+\\.\\d+(\\.\\d+)*(?:-(?:linux|windows)\\d{0,4})?(?:_\\d+\\.\\d+\\.\\d+)?(?:[-\\.](RELEASE))?(?:\\-\\d+$)?"
+      pathMatcher: "*"
+      discriminator: "*manifest.json"
+      recentArtifactRetention: 5
+      lastDownloadedDays: 90
+      whitelistedGroups: [busybox, nginx]
+      whitelistedVersions: [latest]
+      whitelistedArtifacts: []
+    dockerSnapshot:
+      name: docker-local
+      cleanVersionPattern: "(.*-SNAPSHOT)?"
+      pathMatcher: "*"
+      discriminator: "*manifest.json"
+      recentArtifactRetention: 3
+      lastDownloadedDays: 7
+      whitelistedGroups: []
+      whitelistedVersions: []
+      whitelistedArtifacts: []

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="text/html;UTF-8">
+    <link crossorigin="anonymous" href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css"
+              integrity="sha384-Vkoo8x4CGsO3+Hhxv8T/Q5PaXtkKtu6ug5TOeNV6gBiFeWPGFN9MuhOf23Q9Ifjh" rel="stylesheet">
+    <title>Artifact Cleanup Decisions</title>
+</head>
+<body>
+<div class="container">
+    <div class="card">
+        <div class="card-header">
+            <h3>Artifact Cleanup report</h3>
+            <p class="card-text">Services owned by <b>Team_CI</b></p>
+
+        </div>
+        <table class="table table-bordered table-sm">
+                <thead>
+                <tr>
+                    <th>Group</th>
+                    <th>Version</th>
+                    <th>Path</th>
+                    <th>Size</th>
+                    <th>Created at</th>
+                    <th>Updated at</th>
+                    <th>Downloaded at</th>
+                </tr>
+                </thead>
+                <tbody>
+                {{range $group, $decisions := $.Data.GroupedDecisionMap}}
+                {{range $index, $decision := $decisions}}
+                {{if eq $index 0}}
+                <tr class="{{ if eq $decision.CleanupAction 5 }}table-secondary{{else if eq $decision.CleanupAction 3}}table-info{{else if or (eq $decision.CleanupAction 1) (eq $decision.CleanupAction 2)}}table-success{{end}}">
+                    <td rowspan="{{len $decisions}}" class="bg-white">{{$decision.ArtifactMetadata.Group}}</td>
+                    <td>
+                        <span class="badge badge-pill badge-{{ if eq $decision.CleanupAction 5 }}danger{{else}}success{{ end }}">{{index $.CleanupActionStrings $decision.CleanupAction}}</span>
+                        {{$decision.ArtifactMetadata.Version}}
+                    </td>
+                    <td>{{$decision.ArtifactMetadata.Path}}</td>
+                    <td>{{FormatSize $decision.ArtifactMetadata.Size}}</td>
+                    <td>{{DatestampFormat $decision.ArtifactMetadata.CreatedAt}}</td>
+                    <td>{{DatestampFormat $decision.ArtifactMetadata.LastUpdatedAt}}</td>
+                    <td>{{DatestampFormat $decision.ArtifactMetadata.LastDownloadedAt}}</td>
+                </tr>
+                {{else}}
+                <tr  class="{{ if eq $decision.CleanupAction 5 }}table-secondary{{else if eq $decision.CleanupAction 3}}table-info{{else if or (eq $decision.CleanupAction 1) (eq $decision.CleanupAction 2)}}table-success{{end}}">
+                    <td>
+                        <span class="badge badge-pill badge-{{ if eq $decision.CleanupAction 5 }}danger{{else}}success{{ end }}">{{index $.CleanupActionStrings $decision.CleanupAction}}</span>
+                        {{$decision.ArtifactMetadata.Version}}
+                    </td>
+                    <td>{{$decision.ArtifactMetadata.Path}}</td>
+                    <td>{{FormatSize $decision.ArtifactMetadata.Size}}</td>
+                    <td>{{DatestampFormat $decision.ArtifactMetadata.CreatedAt}}</td>
+                    <td>{{DatestampFormat $decision.ArtifactMetadata.LastUpdatedAt}}</td>
+                    <td>{{DatestampFormat $decision.ArtifactMetadata.LastDownloadedAt}}</td>
+                </tr>{{end}}{{end}}{{end}}
+                </tbody>
+            </table>
+        <div class="card-footer">
+            <ul class="list-group">
+                <li class="list-group-item"><b>DryRun:</b> {{ $.Data.DryRun }}</li>
+                <li class="list-group-item"><b>Repository:</b> {{ $.Data.Repository }}</li>
+                <li class="list-group-item"><b>Delete {{ $.Data.Stats.ArtifactsForDeletion }}</b> of {{ $.Data.Stats.TotalArtifacts }} eligible artifacts</li>
+                <li class="list-group-item"><b>Artifacts to remove:</b> {{ $.Data.Stats.ArtifactsForDeletion }}</li>
+                <li class="list-group-item"><b>Whitelisted artifacts:</b> {{ $.Data.Stats.ArtifactsWhitelisted }} </li>
+                <li class="list-group-item"><b>Estimation of freed space:</b> {{ FormatSize $.Data.Stats.TotalSizeForDeletion }}</li>
+            </ul>
+
+        </div>
+
+    </div>
+</div>
+</body>
+</html>
