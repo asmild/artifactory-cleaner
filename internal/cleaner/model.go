@@ -1,0 +1,119 @@
+// Package cleaner contains the domain logic for retention decisions, plan
+// execution, reporting, and configuration loading. It is strategy-agnostic —
+// concrete cleanup strategies live in internal/strategy/*.
+package cleaner
+
+import (
+	"context"
+	"time"
+
+	"github.com/asmild/artifactory-cleaner/internal/artifactory"
+)
+
+// CleanupPlan holds the full state of a planned cleanup run.
+type CleanupPlan struct {
+	Repository         string
+	DryRun             bool
+	Stats              CleanupStatistics
+	GroupedDecisionMap map[string][]CleanupDecision
+	Timestamp          time.Time
+	artClient          Deleter
+}
+
+// Deleter is the subset of artifactory.Client used by Execute.
+type Deleter interface {
+	DeletePath(ctx context.Context, repo, path string) error
+}
+
+// CleanupStatistics summarises what was found and decided.
+type CleanupStatistics struct {
+	TotalArtifacts       int64
+	ArtifactsForDeletion int64
+	ArtifactsWhitelisted int64
+	TotalSize            int64
+	TotalSizeForDeletion int64
+}
+
+// CleanupDecision pairs an artifact with the action decided for it.
+type CleanupDecision struct {
+	CleanupAction CleanupAction
+	Artifact      artifactory.Metadata
+}
+
+// CleanupAction describes what the cleaner will do with an artifact.
+type CleanupAction int
+
+const (
+	UNDEFINED           CleanupAction = iota // artifact has not been evaluated yet
+	RECENT_VERSION                           // kept: within the recentArtifactRetention count for its rule
+	DOWNLOADED_RECENTLY                      // kept: downloaded within the lastDownloadedDays window
+	WHITELISTED                              // kept: in the matched rule's whitelist
+	MANIFEST_LIST_REF                        // kept: Docker platform image (sha256) referenced by a
+	//                                          retained manifest list; deleting it would break docker pull
+	PROTECTED       // kept: in target-level protectedVersions or protectedGroups — checked before rules
+	CREATED_RECENTLY // kept: created within the rule's artifactLifetimeDays grace period; acts as a
+	//                  safety net for newly built artifacts that haven't been downloaded yet
+	UNMATCHED_KEEP // kept: no rule pattern matched, unmatchedAction is "keep"
+	DELETE         // removed: did not satisfy any keep condition
+)
+
+// CleanupActionStrings maps each action to its display label.
+var CleanupActionStrings = map[CleanupAction]string{
+	UNDEFINED:           "UNDEFINED",
+	RECENT_VERSION:      "RECENT_VERSION",
+	DOWNLOADED_RECENTLY: "DOWNLOADED_RECENTLY",
+	WHITELISTED:         "WHITELISTED",
+	MANIFEST_LIST_REF:  "MANIFEST_LIST_REF",
+	PROTECTED:          "PROTECTED",
+	CREATED_RECENTLY:   "CREATED_RECENTLY",
+	UNMATCHED_KEEP:     "UNMATCHED_KEEP",
+	DELETE:             "DELETE",
+}
+
+// TargetSettings is the per-repository configuration from the config file.
+type TargetSettings struct {
+	Name              string         `mapstructure:"name"`
+	UnmatchedAction   string         `mapstructure:"unmatchedAction"`   // "keep" (default) | "delete"
+	ProtectedVersions []string       `mapstructure:"protectedVersions"` // immune to all rules, checked first
+	ProtectedGroups   []string       `mapstructure:"protectedGroups"`   // entire group immune to all rules
+	Concurrency       int            `mapstructure:"concurrency"` // parallel HTTP requests for manifest fetching (Docker); default 8
+	Rules             []RuleSettings `mapstructure:"rules"`
+}
+
+// ManifestConcurrency returns the configured concurrency, or the default if unset.
+func (s TargetSettings) ManifestConcurrency() int {
+	if s.Concurrency > 0 {
+		return s.Concurrency
+	}
+	return 8
+}
+
+// RuleSettings defines one retention rule within a target.
+type RuleSettings struct {
+	Name                    string   `mapstructure:"name"`
+	Pattern                 string   `mapstructure:"pattern"`                 // regexp matched against version
+	Discriminator           string   `mapstructure:"discriminator"`           // Maven/Generic: AQL filename filter
+	PathMatcher             string   `mapstructure:"pathMatcher"`             // Maven/Generic: AQL path filter
+	RecentArtifactRetention int      `mapstructure:"recentArtifactRetention"` // keep N most recent matches
+	LastDownloadedDays      int      `mapstructure:"lastDownloadedDays"`      // keep if downloaded within N days
+	ArtifactLifetimeDays    int      `mapstructure:"artifactLifetimeDays"`    // grace period: keep anything created within N days regardless of downloads
+	WhitelistedGroups       []string `mapstructure:"whitelistedGroups"`       // rule-scoped: only when pattern matched
+	WhitelistedVersions     []string `mapstructure:"whitelistedVersions"`
+	WhitelistedArtifacts    []string `mapstructure:"whitelistedArtifacts"`    // "group@version" pairs
+}
+
+func (s TargetSettings) unmatchedIsDelete() bool {
+	return s.UnmatchedAction == "delete"
+}
+
+// CleanupProperties is the top-level structure of the config file.
+type CleanupProperties struct {
+	Cleanup struct {
+		Repositories map[string]TargetSettings `mapstructure:"repositories"`
+	} `mapstructure:"cleanup"`
+}
+
+// Strategy is implemented by each package-type-specific cleanup strategy.
+type Strategy interface {
+	Plan(ctx context.Context, settings TargetSettings) (map[string][]CleanupDecision, error)
+}
