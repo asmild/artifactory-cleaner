@@ -139,7 +139,7 @@ cleanup:
 | `lastDownloadedDays` | Keep if last downloaded within N days | 0 |
 | `artifactLifetimeDays` | Grace period: keep anything created within N days regardless of downloads | 0 (disabled) |
 | `whitelistedVersions` | Versions to keep unconditionally (must match pattern — validated at startup) | [] |
-| `whitelistedGroups` | Image/group names to keep within this rule | [] |
+| `whitelistedGroups` | Image/group names to keep within this rule. Supports prefix matching: `org/example/tools` also protects `org/example/tools/submodule`. | [] |
 | `whitelistedArtifacts` | `group@version` pairs to keep unconditionally | [] |
 | `discriminator` | Filename filter for AQL (Maven/Generic only) | `*.pom` for Maven |
 | `pathMatcher` | Path glob for AQL (Maven/Generic only) | `*` |
@@ -151,7 +151,7 @@ cleanup:
 | `name` | Artifactory repository key | required |
 | `unmatchedAction` | What to do when no rule pattern matches: `keep` or `delete` | `keep` |
 | `protectedVersions` | Tags never deleted, checked before any rule (e.g. `latest`) | [] |
-| `protectedGroups` | Image/group names immune to all rules | [] |
+| `protectedGroups` | Image/group names immune to all rules. Also supports prefix matching. | [] |
 | `concurrency` | Parallel HTTP requests for manifest list reading (Docker only) | 8 |
 | `rules` | Ordered list of retention rules | required |
 
@@ -195,7 +195,11 @@ Flags:
 Colour-coded terminal output. Red = DELETE, green = kept.
 
 ### CSV / XLSX
-Columns: `Group, Path, Version, Size, Created At, Last Downloaded At, Cleanup Action`.
+Columns: `Group, Path, Version, Tag, Size, Created At, Last Downloaded At, Cleanup Action`.
+
+The **Tag** column shows the manifest list tag that a platform image belongs to (e.g. `2.26.0`
+for a `sha256:abc…` dir or an `amd64-2.26.0` named-arch tag). For manifest list tags themselves
+it repeats the version; for standalone images and Maven artifacts it is empty.
 
 XLSX additionally includes a **Summary** sheet with statistics and the action legend.
 

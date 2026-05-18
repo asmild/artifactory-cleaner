@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/asmild/artifactory-cleaner/internal/artifactory"
@@ -53,7 +54,7 @@ func MakeDecisions(decisions map[string][]CleanupDecision, settings TargetSettin
 	var stats CleanupStatistics
 
 	for group, groupDecisions := range decisions {
-		groupIsProtected := slices.Contains(settings.ProtectedGroups, group)
+		groupIsProtected := groupMatchesWhitelist(group, settings.ProtectedGroups)
 		ruleCounts := make(map[string]int) // rule.Name → RECENT_VERSION slots used
 
 		for i := range groupDecisions {
@@ -77,7 +78,7 @@ func MakeDecisions(decisions map[string][]CleanupDecision, settings TargetSettin
 				matched = true
 
 				// Rule-scoped whitelists (only reachable when pattern matched).
-				if slices.Contains(rule.WhitelistedGroups, group) ||
+				if groupMatchesWhitelist(group, rule.WhitelistedGroups) ||
 					slices.Contains(rule.WhitelistedVersions, meta.Version) ||
 					slices.Contains(rule.WhitelistedArtifacts, group+"@"+meta.Version) {
 					d.CleanupAction = WHITELISTED
@@ -130,6 +131,19 @@ func MakeDecisions(decisions map[string][]CleanupDecision, settings TargetSettin
 	}
 
 	return stats
+}
+
+// groupMatchesWhitelist returns true if group exactly matches any entry in the list,
+// or if group is a sub-group of any entry (i.e. group starts with "entry/").
+// This mirrors Maven repository semantics where a parent group path like
+// "org/example/tools" should also protect "org/example/tools/submodule".
+func groupMatchesWhitelist(group string, list []string) bool {
+	for _, entry := range list {
+		if group == entry || strings.HasPrefix(group, entry+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildDecisionMap groups artifact metadata by Group, sorts each group

@@ -39,15 +39,21 @@ func (s *Strategy) Plan(ctx context.Context, settings cleaner.TargetSettings) (m
 	return dm, nil
 }
 
+// resolveDiscriminator returns the discriminator and pathMatcher to use for the
+// AQL fetch from the first rule, falling back to defaults (*.pom and *).
+// pathMatcher is honoured even when using the default discriminator, so rules
+// can scope the AQL to a subset of the repo (e.g. "*infobip*").
 func resolveDiscriminator(settings cleaner.TargetSettings) (discriminator, pathMatcher string) {
-	for _, rule := range settings.Rules {
-		if rule.Discriminator != "" {
-			p := rule.PathMatcher
-			if p == "" {
-				p = defaultPathMatcher
-			}
-			return rule.Discriminator, p
+	discriminator = defaultDiscriminator
+	pathMatcher = defaultPathMatcher
+	if len(settings.Rules) > 0 {
+		r := settings.Rules[0]
+		if r.Discriminator != "" {
+			discriminator = r.Discriminator
+		}
+		if r.PathMatcher != "" {
+			pathMatcher = r.PathMatcher
 		}
 	}
-	return defaultDiscriminator, defaultPathMatcher
+	return
 }
