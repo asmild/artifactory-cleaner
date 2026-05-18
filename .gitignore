@@ -29,3 +29,11 @@ cleaner_properties.yaml
 *.iml
 *.csv
 templates/layout.html
+report-*
+*.xlsx
+output.html
+artycleaner
+artycleaner.exe
+clean.log
+local.config.yaml
+reports

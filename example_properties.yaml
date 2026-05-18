@@ -1,41 +1,63 @@
 cleanup:
   repositories:
-    release:
-      name: libs-release-local
-      cleanVersionPattern: "\\d+\\.\\d+\\.\\d+(?:[-\\.]RELEASE)?"
-      pathMatcher: "*example*"
-      discriminator: "*conf.zip"
-      recentArtifactRetention: 5
-      lastDownloadedDays: 180
-      whitelistedGroups: [com/example/internal/example-artifact]
-      whitelistedVersions: []
-    snapshot:
-      name: libs-snapshot-local
-      cleanVersionPattern: "\\d+\\.\\d+\\.\\d+(?:[-\\.]SNAPSHOT)?"
-      pathMatcher: "*example*"
-      discriminator: "*.pom"
-      recentArtifactRetention: 3
-      lastDownloadedDays: 7
-      whitelistedGroups: [com/example/internal/example-artifact]
-      whitelistedVersions: []
-      whitelistedArtifacts: []
+
+    # ── Docker ────────────────────────────────────────────────────────────────
+    # packageType is auto-detected from the Artifactory API — no discriminator needed.
+    # One target, one API fetch, two rules classify artifacts by version pattern.
+    #
+    # Retention is driven by platform image pull stats (manifest.json stat.downloaded),
+    # not by the manifest list's own stat. See docs/docker-cleanup-flow.md for details.
     docker:
       name: docker-local
-      cleanVersionPattern: "\\d+\\.\\d+(\\.\\d+)*(?:-(?:linux|windows)\\d{0,4})?(?:_\\d+\\.\\d+\\.\\d+)?(?:[-\\.](RELEASE))?(?:\\-\\d+$)?"
-      pathMatcher: "*"
-      discriminator: "*manifest.json"
-      recentArtifactRetention: 5
-      lastDownloadedDays: 90
-      whitelistedGroups: [busybox, nginx]
-      whitelistedVersions: [latest]
-      whitelistedArtifacts: []
-    dockerSnapshot:
-      name: docker-local
-      cleanVersionPattern: "(.*-SNAPSHOT)?"
-      pathMatcher: "*"
-      discriminator: "*manifest.json"
-      recentArtifactRetention: 3
-      lastDownloadedDays: 7
-      whitelistedGroups: []
-      whitelistedVersions: []
-      whitelistedArtifacts: []
+      unmatchedAction: keep             # keep anything that doesn't match a rule (e.g. "latest")
+      protectedVersions: [latest]       # never deleted, checked before any rule
+      protectedGroups: [busybox, nginx]  # entire image immune to all rules
+      concurrency: 8                    # parallel manifest list reads (raise to 16-32 if slow)
+
+      # Rules are evaluated in order; the first matching pattern wins.
+      rules:
+        - name: snapshots
+          pattern: ".*-SNAPSHOT.*"
+          recentArtifactRetention: 3
+          lastDownloadedDays: 1         # keep if pulled within 1 day
+          artifactLifetimeDays: 7       # grace period for newly pushed images not yet pulled
+
+        - name: releases
+          pattern: "\\d+\\.\\d+(\\.\\d+)*(?:-(?:linux|windows)\\d{0,4})?(?:_\\d+\\.\\d+\\.\\d+)?(?:[-\\.](RELEASE))?(?:\\-\\d+$)?"
+          recentArtifactRetention: 5
+          lastDownloadedDays: 90
+
+    # ── Maven ─────────────────────────────────────────────────────────────────
+    # discriminator defaults to *.pom; override per rule if needed.
+    libs-snapshot:
+      name: libs-snapshot-local
+      unmatchedAction: keep
+      rules:
+        - name: snapshots
+          pattern: "\\d+\\.\\d+\\.\\d+(?:[-\\.]SNAPSHOT)?"
+          pathMatcher: "*"
+          recentArtifactRetention: 3
+          lastDownloadedDays: 7
+
+    libs-release:
+      name: libs-release-local
+      unmatchedAction: keep
+      rules:
+        - name: releases
+          pattern: "\\d+\\.\\d+\\.\\d+(?:[-\\.]RELEASE)?"
+          pathMatcher: "*"
+          recentArtifactRetention: 5
+          lastDownloadedDays: 180
+
+    # ── Generic ───────────────────────────────────────────────────────────────
+    # discriminator is required for Generic repos.
+    my-generic:
+      name: generic-local
+      unmatchedAction: keep
+      rules:
+        - name: all
+          pattern: ".*"
+          discriminator: "*.zip"
+          pathMatcher: "*"
+          recentArtifactRetention: 3
+          lastDownloadedDays: 90

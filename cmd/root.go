@@ -1,50 +1,89 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
-	"github.com/asmild/artifactory-cleaner/cleaner"
-	"github.com/asmild/artifactory-cleaner/util"
-	"github.com/spf13/cobra"
 	"os"
+	"os/signal"
+	"slices"
+	"syscall"
+
+	"github.com/asmild/artifactory-cleaner/internal/artifactory"
+	"github.com/asmild/artifactory-cleaner/internal/cleaner"
+	"github.com/asmild/artifactory-cleaner/internal/strategy"
+	"github.com/spf13/cobra"
 )
 
-var lastDownloadedDays int
-var target string
 var cfgFile string
-
 var dryRun bool
 var force bool
-
 var outputFile string
 var outputFormat string
-var outputFormatAllowedValues = []string{"table", "csv", "html"}
 
-var silent bool
+var allowedFormats = []string{"table", "csv", "html", "xlsx"}
 
 var rootCmd = &cobra.Command{
 	Use:   "artycleaner",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
+	Short: "Clean up stale artifacts from an Artifactory repository",
+	Long: `artycleaner removes stale artifacts from Artifactory based on configurable
+retention policies — by age, recent-download window, or explicit whitelists.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+The cleanup strategy is auto-detected from the repository's package type
+(Docker, Maven, Generic, etc.) via the Artifactory API.
+
+Requires ARTIFACTORY_URL and ARTIFACTORY_TOKEN environment variables.`,
 
 	RunE: func(cmd *cobra.Command, args []string) error {
-		plan, err := cleaner.NewCleanupPlan(target, cfgFile, dryRun)
-		if nil != err {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		target, _ := cmd.Flags().GetString("target")
+
+		artClient, err := artifactory.New()
+		if err != nil {
 			return err
 		}
 
-		err = plan.ShowReport(outputFormat, outputFile)
-		if nil != err {
+		if cfgFile == "" {
+			cfgFile = cleaner.ConfigFile
+		}
+		props, err := cleaner.LoadCleanupProperties(cfgFile)
+		if err != nil {
+			return err
+		}
+		settings, ok := props.Cleanup.Repositories[target]
+		if !ok {
+			return fmt.Errorf("target %q not found in config", target)
+		}
+
+		repoInfo, err := artClient.GetRepoInfo(ctx, settings.Name)
+		if err != nil {
+			return fmt.Errorf("cannot access repository %q: %w", settings.Name, err)
+		}
+		if repoInfo.RClass != "local" {
+			return fmt.Errorf("repository %q is %q — only local repos can be cleaned", settings.Name, repoInfo.RClass)
+		}
+		fmt.Printf("Repository: %s  type: %s  package: %s\n\n", repoInfo.Key, repoInfo.RClass, repoInfo.PackageType)
+
+		strat, err := strategy.New(repoInfo.PackageType, artClient)
+		if err != nil {
+			return err
+		}
+
+		plan, err := cleaner.NewCleanupPlan(ctx, target, cfgFile, dryRun, artClient, strat)
+		if err != nil {
+			return err
+		}
+
+		resolvedOutput := resolveOutputFile(outputFile, target, outputFormat)
+		if err := plan.ShowReport(outputFormat, resolvedOutput); err != nil {
 			return err
 		}
 
 		plan.PrintCleanupStatistics()
+
 		if plan.Stats.ArtifactsForDeletion == 0 {
-			fmt.Printf("\nNothing to delete. Exiting...\n")
+			fmt.Println("\nNothing to delete. Exiting.")
 			return nil
 		}
 
@@ -59,51 +98,49 @@ to quickly create a Cobra application.`,
 		}
 
 		if dryRun {
-			fmt.Printf("\nThese artifacts are not deleted due to dryRun set to true:\n")
+			fmt.Println("\nDry-run: artifacts listed above would be deleted.")
 		} else {
-			fmt.Printf("\nThese artifacts are deleted removed:\n")
+			fmt.Println("\nDeleting artifacts:")
 		}
-		plan.Execute()
-		return nil
+		return plan.Execute(ctx)
 	},
 }
 
+// Execute runs the root command.
 func Execute() error {
 	return rootCmd.Execute()
 }
 
-//-DdryRun=true
-//-DlastDownloadedDays=
-//-Dtarget=dockerIotSnapshot
-//-Dcleanup.target=dockerIotSnapshot
-//-Dcleanup.last.downloaded.days=
-//-Dcleanup.dryRun=true
+// SetVersion sets the version string shown by --version.
+func SetVersion(v string) {
+	rootCmd.Version = v
+}
 
 func init() {
 	rootCmd.SilenceUsage = true
-	rootCmd.Flags().StringVar(&cfgFile, "config", "", "Cleanup config file")
-	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Dry run")
-	rootCmd.Flags().BoolVarP(&silent, "silent", "s", false, "Silent mode")
-	rootCmd.Flags().BoolVar(&force, "force", false, "Omit prompt of confirmation from user")
-	rootCmd.Flags().IntVar(&lastDownloadedDays, "lastDownloadedDays", 0, "How long ago the deleting artifact ...")
-	rootCmd.Flags().StringVarP(&target, "target", "t", "", " Target repository to clean")
-	rootCmd.MarkFlagRequired("target")
-	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", " Write to file instead of stdout")
-	rootCmd.Flags().StringVarP(&outputFormat, "format", "f", "table", " Output format - table, csv, html")
+	rootCmd.Flags().StringVar(&cfgFile, "config", "", "Cleanup config file (default: "+cleaner.ConfigFile+")")
+	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be deleted without deleting")
+	rootCmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	rootCmd.Flags().StringP("target", "t", "", "Target repository key from the config file")
+	rootCmd.MarkFlagRequired("target") //nolint:errcheck
+	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Write report to file instead of stdout")
+	rootCmd.Flags().StringVarP(&outputFormat, "format", "f", "table", "Report format: table, csv, html, xlsx")
 	cobra.OnInitialize(validateArgs)
 }
 
 func validateArgs() {
-	if !util.Contains(outputFormatAllowedValues, outputFormat) {
-		fmt.Fprintln(os.Stderr, "invalid value for 'format': allowed values are ", outputFormatAllowedValues)
+	if !slices.Contains(allowedFormats, outputFormat) {
+		fmt.Fprintf(os.Stderr, "invalid --format %q: allowed values are %v\n", outputFormat, allowedFormats)
 		os.Exit(1)
 	}
-
 	if dryRun {
-		fmt.Println("Dry run. Deleting artifacts is not performing")
+		fmt.Println("Dry-run mode: no artifacts will be deleted.")
 	}
+}
 
-	if len(outputFile) == 0 {
-		fmt.Println("Output file is not defined. Printing to stdout")
+func resolveOutputFile(explicit, target, format string) string {
+	if explicit != "" || format == "table" {
+		return explicit
 	}
+	return fmt.Sprintf("report-%s.%s", target, format)
 }
