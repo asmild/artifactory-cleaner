@@ -12,9 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # required for SonarCloud blame information
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
-      - run: go test -v ./...
-      - run: go build ./...   # single compile check, no matrix
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with coverage
+        run: go test -v -coverprofile=coverage.out ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@v3
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
