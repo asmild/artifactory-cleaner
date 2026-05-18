@@ -111,6 +111,11 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// SetVersion sets the version string shown by --version.
+func SetVersion(v string) {
+	rootCmd.Version = v
+}
+
 func init() {
 	rootCmd.SilenceUsage = true
 	rootCmd.Flags().StringVar(&cfgFile, "config", "", "Cleanup config file (default: "+cleaner.ConfigFile+")")
