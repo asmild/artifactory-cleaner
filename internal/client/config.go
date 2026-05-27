@@ -9,8 +9,9 @@ import (
 
 // Config holds the Artifactory connection settings loaded from environment variables.
 type Config struct {
-	URL   string
-	Token string
+	URL     string
+	Token   string
+	Verbose bool
 }
 
 // NewConfig reads ARTIFACTORY_URL and ARTIFACTORY_TOKEN from the environment.

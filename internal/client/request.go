@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Client struct {
 	http             *http.Client
 	artifactoryURL   *url.URL
 	artifactoryToken string
+	verbose          bool
 }
 
 // NewClient creates a Client from the given Config.
@@ -41,7 +43,16 @@ func NewClient(config Config) (*Client, error) {
 		http:             c,
 		artifactoryURL:   parsedURL,
 		artifactoryToken: config.Token,
+		verbose:          config.Verbose,
 	}, nil
+}
+
+// isLegacyAPIKey returns true when the token is an old-style Artifactory API key
+// (starts with "AKC"). API keys use X-JFrog-Art-Api and are deprecated.
+// Everything else — JWT Access Tokens (eyJ...) and Reference Tokens — uses
+// Authorization: Bearer.
+func isLegacyAPIKey(token string) bool {
+	return strings.HasPrefix(token, "AKC")
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte, extraHeaders map[string]string) ([]byte, int, error) {
@@ -49,12 +60,31 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, extra
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("X-JFrog-Art-Api", c.artifactoryToken)
+	if isLegacyAPIKey(c.artifactoryToken) {
+		req.Header.Set("X-JFrog-Art-Api", c.artifactoryToken)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+c.artifactoryToken)
+	}
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "text/plain")
 	}
 	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
+	}
+
+	if c.verbose {
+		fmt.Printf(">>> %s %s\n", method, req.URL)
+		for k, v := range req.Header {
+			kl := strings.ToLower(k)
+			if kl == "x-jfrog-art-api" || kl == "authorization" {
+				fmt.Printf("    %s: [redacted]\n", k)
+			} else {
+				fmt.Printf("    %s: %s\n", k, v)
+			}
+		}
+		if len(body) > 0 {
+			fmt.Printf("    body: %s\n", truncate(string(body), 500))
+		}
 	}
 
 	resp, err := c.http.Do(req)
@@ -67,17 +97,23 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, extra
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("read response body: %w", err)
 	}
+
+	if c.verbose {
+		fmt.Printf("<<< %d %s\n", resp.StatusCode, req.URL.Path)
+		fmt.Printf("    body: %s\n\n", truncate(string(respBody), 500))
+	}
+
 	return respBody, resp.StatusCode, nil
 }
 
-// Post sends a POST with text/plain body (used for AQL queries).
+// Post sends an AQL query (POST with text body) and returns the response body.
 func (c *Client) Post(ctx context.Context, path, payload string) ([]byte, error) {
 	body, status, err := c.do(ctx, "POST", path, []byte(payload), nil)
 	if err != nil {
 		return nil, err
 	}
 	if status >= 400 {
-		return nil, fmt.Errorf("request failed: HTTP %d", status)
+		return nil, fmt.Errorf("request failed: HTTP %d: %s", status, body)
 	}
 	if string(body) == "null" {
 		return nil, nil
@@ -93,7 +129,7 @@ func (c *Client) PostJSON(ctx context.Context, path, payload string) ([]byte, er
 		return nil, err
 	}
 	if status >= 400 {
-		return nil, fmt.Errorf("request failed: HTTP %d", status)
+		return nil, fmt.Errorf("request failed: HTTP %d: %s", status, body)
 	}
 	return body, nil
 }
@@ -105,7 +141,7 @@ func (c *Client) Get(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	if status >= 400 {
-		return nil, fmt.Errorf("request failed: HTTP %d", status)
+		return nil, fmt.Errorf("request failed: HTTP %d: %s", status, body)
 	}
 	return body, nil
 }
@@ -121,7 +157,7 @@ func (c *Client) GetOptional(ctx context.Context, path string) ([]byte, error) {
 		return nil, nil
 	}
 	if status >= 400 {
-		return nil, fmt.Errorf("request failed: HTTP %d", status)
+		return nil, fmt.Errorf("request failed: HTTP %d: %s", status, body)
 	}
 	return body, nil
 }
@@ -136,19 +172,26 @@ func (c *Client) GetWithHeaders(ctx context.Context, path string, headers map[st
 		return nil, nil
 	}
 	if status >= 400 {
-		return nil, fmt.Errorf("request failed: HTTP %d", status)
+		return nil, fmt.Errorf("request failed: HTTP %d: %s", status, body)
 	}
 	return body, nil
 }
 
 // Delete sends a DELETE request to path.
 func (c *Client) Delete(ctx context.Context, path string) error {
-	_, status, err := c.do(ctx, "DELETE", path, nil, nil)
+	body, status, err := c.do(ctx, "DELETE", path, nil, nil)
 	if err != nil {
 		return err
 	}
 	if status >= 400 {
-		return fmt.Errorf("delete failed: HTTP %d", status)
+		return fmt.Errorf("delete failed: HTTP %d: %s", status, body)
 	}
 	return nil
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + fmt.Sprintf("... [%d bytes total]", len(s))
 }
