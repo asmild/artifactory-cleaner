@@ -77,6 +77,12 @@ func planMultiPlatform(ctx context.Context, client artifactory.Repository, setti
 	// Add synthetic decisions for all platform image paths.
 	handledPaths := addPlatformImageDecisions(dm, digestMap, cr.index)
 
+	// Fetch real sizes for sha256 platform image dirs concurrently,
+	// then propagate the totals up to each manifest list tag entry.
+	if err := fetchAndApplySizes(ctx, client, settings.Name, dm, digestMap, settings.ManifestConcurrency()); err != nil {
+		return nil, nil, err
+	}
+
 	return dm, handledPaths, nil
 }
 
@@ -195,6 +201,125 @@ func buildVirtualArtifacts(
 // Platform images that belong to a KEPT manifest list get MANIFEST_LIST_REF;
 // those belonging to a DELETED list get DELETE.
 // Returns the set of artifact paths handled here so Pass 2 can skip them.
+// fetchAndApplySizes concurrently fetches the real size of every sha256 platform
+// image directory via the Artifactory artifactsCount API, updates those entries
+// in the decision map, and sets each manifest list tag's size to the sum of its
+// platform images so the report shows the actual Docker image footprint.
+func fetchAndApplySizes(
+	ctx context.Context,
+	client artifactory.Repository,
+	repo string,
+	decisions map[string][]cleaner.CleanupDecision,
+	digestMap map[string][]string,
+	concurrency int,
+) error {
+	// Collect all unique sha256 dir paths we need sizes for.
+	type job struct{ path string }
+	type result struct {
+		path string
+		size int64
+	}
+
+	seen := make(map[string]bool)
+	var jobs []job
+	for _, digests := range digestMap {
+		for _, digest := range digests {
+			// sha256 dir path = group + "/" + digest
+			for group := range decisions {
+				p := group + "/" + digest
+				if !seen[p] {
+					seen[p] = true
+					jobs = append(jobs, job{p})
+				}
+			}
+		}
+	}
+	// Simpler: collect from decisions directly.
+	seen = make(map[string]bool)
+	jobs = nil
+	for _, groupDecisions := range decisions {
+		for _, d := range groupDecisions {
+			if strings.HasPrefix(d.Artifact.Version, "sha256:") && !seen[d.Artifact.Path] {
+				seen[d.Artifact.Path] = true
+				jobs = append(jobs, job{d.Artifact.Path})
+			}
+		}
+	}
+
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	fmt.Printf("Fetching sizes for %d platform image directories:\n", len(jobs))
+	bar := progressbar.New(len(jobs))
+
+	jobCh := make(chan job, len(jobs))
+	resCh := make(chan result, len(jobs))
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case j, ok := <-jobCh:
+					if !ok {
+						return
+					}
+					size, _ := client.FetchDirectorySize(ctx, repo, j.path)
+					bar.Add(1) //nolint:errcheck
+					resCh <- result{j.path, size}
+				}
+			}
+		}()
+	}
+	for _, j := range jobs {
+		jobCh <- j
+	}
+	close(jobCh)
+	go func() { wg.Wait(); close(resCh) }()
+
+	// Build path → size map.
+	sizeByPath := make(map[string]int64, len(jobs))
+	for r := range resCh {
+		sizeByPath[r.path] = r.size
+	}
+	fmt.Printf("\n\n")
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Update sha256 dir decisions with real sizes.
+	for group, groupDecisions := range decisions {
+		for i := range groupDecisions {
+			d := &groupDecisions[i]
+			if strings.HasPrefix(d.Artifact.Version, "sha256:") {
+				d.Artifact.Size = sizeByPath[d.Artifact.Path]
+			}
+		}
+
+		// Set manifest list tag size = sum of its platform image sizes.
+		for i := range groupDecisions {
+			d := &groupDecisions[i]
+			if !strings.HasPrefix(d.Artifact.Version, "sha256:") && d.Artifact.ManifestListTag == d.Artifact.Version {
+				// This is a manifest list entry — sum its platform dirs.
+				var total int64
+				for _, digest := range digestMap[group+"/"+d.Artifact.Version] {
+					total += sizeByPath[group+"/"+digest]
+				}
+				if total > 0 {
+					d.Artifact.Size = total
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func addPlatformImageDecisions(
 	decisions map[string][]cleaner.CleanupDecision,
 	digestMap map[string][]string,
@@ -236,6 +361,7 @@ func addPlatformImageDecisions(
 						Group:           group,
 						Version:         digest,
 						ManifestListTag: mlTag,
+						// Size set later by fetchAndApplySizes
 					},
 				})
 			}
