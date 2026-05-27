@@ -28,11 +28,12 @@ type Client struct {
 }
 
 // New creates a Client from environment-configured credentials.
-func New() (*Client, error) {
+func New(verbose bool) (*Client, error) {
 	cfg, err := http.NewConfig()
 	if err != nil {
 		return nil, err
 	}
+	cfg.Verbose = verbose
 	c, err := http.NewClient(cfg)
 	if err != nil {
 		return nil, err

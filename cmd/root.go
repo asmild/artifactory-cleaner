@@ -17,6 +17,7 @@ import (
 var cfgFile string
 var dryRun bool
 var force bool
+var verbose bool
 var outputFile string
 var outputFormat string
 
@@ -39,7 +40,7 @@ Requires ARTIFACTORY_URL and ARTIFACTORY_TOKEN environment variables.`,
 
 		target, _ := cmd.Flags().GetString("target")
 
-		artClient, err := artifactory.New()
+		artClient, err := artifactory.New(verbose)
 		if err != nil {
 			return err
 		}
@@ -121,6 +122,7 @@ func init() {
 	rootCmd.Flags().StringVar(&cfgFile, "config", "", "Cleanup config file (default: "+cleaner.ConfigFile+")")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be deleted without deleting")
 	rootCmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	rootCmd.Flags().BoolVar(&verbose, "verbose", false, "Print HTTP requests and responses (redacts auth token)")
 	rootCmd.Flags().StringP("target", "t", "", "Target repository key from the config file")
 	rootCmd.MarkFlagRequired("target") //nolint:errcheck
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Write report to file instead of stdout")
