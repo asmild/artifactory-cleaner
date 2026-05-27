@@ -17,6 +17,7 @@ import (
 type Repository interface {
 	FindArtifacts(ctx context.Context, f ArtifactFilter) ([]Metadata, error)
 	FindManifestChecksums(ctx context.Context, repo string) (map[string][]ManifestStat, error)
+	FetchDirectorySize(ctx context.Context, repo, artifactPath string) (int64, error)
 	GetManifestListDigests(ctx context.Context, repo, artifactPath string) ([]string, error)
 	DeletePath(ctx context.Context, repo, artifactPath string) error
 }
@@ -71,6 +72,48 @@ func (c *Client) FindArtifacts(ctx context.Context, f ArtifactFilter) ([]Metadat
 	}
 	fmt.Printf("\n\n")
 	return results, nil
+}
+
+// FetchDirectorySize returns the total size of an artifact directory via the
+// Artifactory UI artifactsCount endpoint.
+// artifactPath is relative to the repo, e.g. "my-image/sha256:abc...".
+func (c *Client) FetchDirectorySize(ctx context.Context, repo, artifactPath string) (int64, error) {
+	body := fmt.Sprintf(`{"name":%q,"repositoryPath":%q}`, repo, repo+"/"+artifactPath)
+	data, err := c.http.PostJSON(ctx, "/artifactory/ui/artifactgeneral/artifactsCount", body)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		ArtifactSize string `json:"artifactSize"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return 0, fmt.Errorf("parse artifactsCount response: %w", err)
+	}
+	return parseSizeString(result.ArtifactSize), nil
+}
+
+// parseSizeString converts Artifactory size strings like "492.98 MB" to bytes.
+func parseSizeString(s string) int64 {
+	s = strings.TrimSpace(s)
+	var value float64
+	var unit string
+	if _, err := fmt.Sscanf(s, "%f %s", &value, &unit); err != nil {
+		return 0
+	}
+	switch strings.ToLower(unit) {
+	case "bytes", "b":
+		return int64(value)
+	case "kb":
+		return int64(value * 1024)
+	case "mb":
+		return int64(value * 1024 * 1024)
+	case "gb":
+		return int64(value * 1024 * 1024 * 1024)
+	case "tb":
+		return int64(value * 1024 * 1024 * 1024 * 1024)
+	}
+	return 0
 }
 
 // FindManifestChecksums returns a reverse index: sha256 → []ManifestStat for all

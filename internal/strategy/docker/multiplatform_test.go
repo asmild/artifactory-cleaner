@@ -609,6 +609,10 @@ func (m *mockRepo) FindManifestChecksums(_ context.Context, _ string) (map[strin
 	}
 	return map[string][]artifactory.ManifestStat{}, nil
 }
+func (m *mockRepo) FetchDirectorySize(_ context.Context, _, _ string) (int64, error) {
+	return 0, nil
+}
 func (m *mockRepo) DeletePath(_ context.Context, _, _ string) error { return nil }
 
 var _ artifactory.Repository = (*artifactory.Client)(nil)
+// already appended - will be deduped

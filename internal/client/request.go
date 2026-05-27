@@ -70,7 +70,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, extra
 	return respBody, resp.StatusCode, nil
 }
 
-// Post sends an AQL query (POST with text body) and returns the response body.
+// Post sends a POST with text/plain body (used for AQL queries).
 func (c *Client) Post(ctx context.Context, path, payload string) ([]byte, error) {
 	body, status, err := c.do(ctx, "POST", path, []byte(payload), nil)
 	if err != nil {
@@ -81,6 +81,19 @@ func (c *Client) Post(ctx context.Context, path, payload string) ([]byte, error)
 	}
 	if string(body) == "null" {
 		return nil, nil
+	}
+	return body, nil
+}
+
+// PostJSON sends a POST with application/json body.
+func (c *Client) PostJSON(ctx context.Context, path, payload string) ([]byte, error) {
+	body, status, err := c.do(ctx, "POST", path, []byte(payload),
+		map[string]string{"Content-Type": "application/json"})
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("request failed: HTTP %d", status)
 	}
 	return body, nil
 }
