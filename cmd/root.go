@@ -88,7 +88,7 @@ Requires ARTIFACTORY_URL and ARTIFACTORY_TOKEN environment variables.`,
 			return nil
 		}
 
-		if !force {
+		if !force && !dryRun {
 			var confirm string
 			fmt.Print("Delete artifacts. Do you want to proceed? (y/n): ")
 			fmt.Scan(&confirm)

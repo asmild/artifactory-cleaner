@@ -58,16 +58,17 @@ const (
 )
 
 // CleanupActionStrings maps each action to its display label.
+// Kept actions are prefixed with KEEP_ so the Action column is self-explanatory.
 var CleanupActionStrings = map[CleanupAction]string{
 	UNDEFINED:           "UNDEFINED",
-	RECENT_VERSION:      "RECENT_VERSION",
-	DOWNLOADED_RECENTLY: "DOWNLOADED_RECENTLY",
-	WHITELISTED:         "WHITELISTED",
-	MANIFEST_LIST_REF:  "MANIFEST_LIST_REF",
-	PROTECTED:          "PROTECTED",
-	CREATED_RECENTLY:   "CREATED_RECENTLY",
-	UNMATCHED_KEEP:     "UNMATCHED_KEEP",
-	DELETE:             "DELETE",
+	RECENT_VERSION:      "KEEP_RECENT_VERSION",
+	DOWNLOADED_RECENTLY: "KEEP_DOWNLOADED_RECENTLY",
+	CREATED_RECENTLY:    "KEEP_CREATED_RECENTLY",
+	WHITELISTED:         "KEEP_WHITELISTED",
+	PROTECTED:           "KEEP_PROTECTED",
+	MANIFEST_LIST_REF:   "KEEP_MANIFEST_LIST_REF",
+	UNMATCHED_KEEP:      "KEEP_UNMATCHED",
+	DELETE:              "DELETE",
 }
 
 // TargetSettings is the per-repository configuration from the config file.

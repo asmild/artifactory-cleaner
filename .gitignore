@@ -37,3 +37,4 @@ artycleaner.exe
 clean.log
 local.config.yaml
 reports
+.git.*
