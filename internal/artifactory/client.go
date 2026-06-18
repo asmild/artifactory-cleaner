@@ -16,7 +16,6 @@ import (
 // importing each other.
 type Repository interface {
 	FindArtifacts(ctx context.Context, f ArtifactFilter) ([]Metadata, error)
-	FindManifestChecksums(ctx context.Context, repo string) (map[string][]ManifestStat, error)
 	FetchDirectorySize(ctx context.Context, repo, artifactPath string) (int64, error)
 	GetManifestListDigests(ctx context.Context, repo, artifactPath string) ([]string, error)
 	DeletePath(ctx context.Context, repo, artifactPath string) error
@@ -117,49 +116,6 @@ func parseSizeString(s string) int64 {
 	return 0
 }
 
-// FindManifestChecksums returns a reverse index: sha256 → []ManifestStat for all
-// manifest.json files in the repo, excluding sha256-tagged paths.
-// Including stat.downloaded allows callers to derive the effective last-pull time
-// for a manifest list from its platform images — whose stats are never contaminated
-// by the cleaner (the cleaner only reads list.manifest.json, not manifest.json).
-func (c *Client) FindManifestChecksums(ctx context.Context, repo string) (map[string][]ManifestStat, error) {
-	const query = `items.find({"repo":%q,"name":"manifest.json","path":{"$nmatch":"*/sha256:*"}}).include("path","sha256","stat.downloaded")`
-
-	data, err := c.http.Post(ctx, "/artifactory/api/search/aql", fmt.Sprintf(query, repo))
-	if err != nil {
-		return nil, fmt.Errorf("fetch manifest checksums: %w", err)
-	}
-
-	var result struct {
-		Results []struct {
-			Path   string `json:"path"`
-			SHA256 string `json:"sha256"`
-			Stats  []struct {
-				Downloaded time.Time `json:"downloaded"`
-			} `json:"stats,omitempty"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("parse manifest checksums: %w", err)
-	}
-
-	index := make(map[string][]ManifestStat, len(result.Results))
-	for _, r := range result.Results {
-		if r.SHA256 == "" {
-			continue
-		}
-		var downloadedAt *time.Time
-		if len(r.Stats) > 0 {
-			t := r.Stats[0].Downloaded
-			downloadedAt = &t
-		}
-		index[r.SHA256] = append(index[r.SHA256], ManifestStat{
-			Path:         r.Path,
-			DownloadedAt: downloadedAt,
-		})
-	}
-	return index, nil
-}
 
 // GetOptionalFile fetches file content at repo/filePath.
 // Returns (nil, nil) when the file does not exist (HTTP 404).
@@ -193,7 +149,7 @@ func (c *Client) GetManifestListDigests(ctx context.Context, repo, artifactPath 
 
 	digests := make([]string, 0, len(m.Manifests))
 	for _, entry := range m.Manifests {
-		digests = append(digests, entry.Digest)
+		digests = append(digests, strings.TrimPrefix(entry.Digest, "sha256:"))
 	}
 	return digests, nil
 }
@@ -207,7 +163,7 @@ func (c *Client) DeletePath(ctx context.Context, repo, artifactPath string) erro
 
 func (c *Client) queryArtifacts(ctx context.Context, f ArtifactFilter) ([]Item, error) {
 	query := buildAQL(f)
-	const includeFields = `.include("repo","path","name","size","created","stat.downloaded")`
+	const includeFields = `.include("repo","path","name","size","created","sha256","stat.downloaded")`
 
 	data, err := c.http.Post(ctx, "/artifactory/api/search/aql", query+includeFields)
 	if err != nil {
@@ -254,6 +210,7 @@ func toMetadata(item Item) Metadata {
 		Group:            group,
 		Version:          version,
 		Size:             item.Size,
+		SHA256:           item.SHA256,
 		CreatedAt:        &item.Created,
 		LastDownloadedAt: lastDownloadedAt,
 	}

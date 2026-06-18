@@ -38,6 +38,7 @@ func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, ar
 		fmt.Printf("\t- Rule %-20s pattern=%-40s retention=%d days=%d\n",
 			fmt.Sprintf("[%s]", r.Name), r.Pattern, r.RecentArtifactRetention, r.LastDownloadedDays)
 	}
+
 	fmt.Println()
 
 	fmt.Println("Running cleanup strategy...")
@@ -62,7 +63,7 @@ func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, ar
 func (cp *CleanupPlan) Execute(ctx context.Context) error {
 	for _, decisions := range cp.GroupedDecisionMap {
 		for _, decision := range decisions {
-			if decision.CleanupAction != DELETE {
+			if decision.CleanupAction != DELETE && decision.CleanupAction != DELETE_ORPHANED {
 				continue
 			}
 			if err := ctx.Err(); err != nil {

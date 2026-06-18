@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/olekukonko/tablewriter"
@@ -48,7 +49,8 @@ func (cp *CleanupPlan) PrintCleanupStatistics() {
 	order := []CleanupAction{
 		RECENT_VERSION, DOWNLOADED_RECENTLY, CREATED_RECENTLY,
 		WHITELISTED, PROTECTED, MANIFEST_LIST_REF, UNMATCHED_KEEP,
-		DELETE,
+		KEEP_ORPHANED,
+		DELETE, DELETE_ORPHANED,
 	}
 	for _, a := range order {
 		if n := counts[a]; n > 0 {
@@ -66,6 +68,8 @@ func (cp *CleanupPlan) PrintCleanupStatistics() {
 	fmt.Printf("                          retained manifest list; deleting it would break docker pull\n")
 	fmt.Printf("    UNMATCHED_KEEP      — kept: no rule pattern matched, unmatchedAction is 'keep'\n")
 	fmt.Printf("    DELETE              — will be removed\n")
+	fmt.Printf("    DELETE_ORPHANED     — will be removed (manifest that don't belong to any manifest list or no platform manifests found for the manifest list1)\n")
+	fmt.Printf("    KEEP_ORPHANED       — kept: orphaned — no platform manifests found for digests in the manifest list\n")
 }
 
 func (cp *CleanupPlan) printCSV(outputFile string) error {
@@ -91,7 +95,7 @@ func (cp *CleanupPlan) printCSV(outputFile string) error {
 				group,
 				m.Path,
 				m.Version,
-				m.ManifestListTag,
+				strings.Join(m.Parent, ";"),
 				formatSize(m.Size),
 				formatTimestamp(m.CreatedAt),
 				formatTimestamp(m.LastDownloadedAt),
@@ -126,15 +130,17 @@ func (cp *CleanupPlan) printTable() {
 				groupCell = group
 			}
 			color := tablewriter.FgGreenColor
-			if d.CleanupAction == DELETE {
+			if d.CleanupAction == DELETE || d.CleanupAction == DELETE_ORPHANED {
 				color = tablewriter.FgRedColor
+			} else if d.CleanupAction == KEEP_ORPHANED {
+				color = tablewriter.FgYellowColor
 			}
 			table.Rich(
 				[]string{
 					groupCell,
 					m.Path,
 					m.Version,
-					m.ManifestListTag,
+					strings.Join(m.Parent, ";"),
 					formatSize(m.Size),
 					formatTimestamp(m.CreatedAt),
 					formatTimestamp(m.LastDownloadedAt),
@@ -205,18 +211,20 @@ func (cp *CleanupPlan) printXLSX(outputFile string) error {
 		return s
 	}
 
-	styleHeader      := mkHeaderStyle()
-	styleDefault     := mkFill("FFFFFF") // white — applied to all uncoloured rows
-	styleDelete      := mkFill("FF9999") // light red
+	styleHeader := mkHeaderStyle()
+	styleDefault := mkFill("FFFFFF")     // white — applied to all uncoloured rows
+	styleDelete := mkFill("FF9999")      // light red
 	styleManifestRef := mkFill("B3D9FF") // light blue
-	styleKept        := mkFill("99FF99") // light green
-	styleProtected   := mkFill("FFFFCC") // light yellow
-	styleUnmatched   := mkFill("E8E8E8") // light grey
+	styleKept := mkFill("99FF99")        // light green
+	styleProtected := mkFill("FFFFCC")   // light yellow
+	styleUnmatched := mkFill("E8E8E8")   // light grey
 
 	actionStyle := func(a CleanupAction) int {
 		switch a {
-		case DELETE:
+		case DELETE, DELETE_ORPHANED:
 			return styleDelete
+		case KEEP_ORPHANED:
+			return styleUnmatched
 		case MANIFEST_LIST_REF:
 			return styleManifestRef
 		case RECENT_VERSION, DOWNLOADED_RECENTLY, WHITELISTED, CREATED_RECENTLY:
@@ -256,7 +264,7 @@ func (cp *CleanupPlan) printXLSX(outputFile string) error {
 				group,
 				m.Path,
 				m.Version,
-				m.ManifestListTag,
+				strings.Join(m.Parent, ";"),
 				formatSize(m.Size),
 				formatTimestamp(m.CreatedAt),
 				formatTimestamp(m.LastDownloadedAt),
@@ -309,6 +317,8 @@ func (cp *CleanupPlan) printXLSX(outputFile string) error {
 		{"MANIFEST_LIST_REF", "Kept: Docker platform image (sha256) referenced by a retained manifest list — deleting it would break docker pull"},
 		{"UNMATCHED_KEEP", "Kept: no rule pattern matched, unmatchedAction is 'keep'"},
 		{"DELETE", "Will be removed"},
+		{"DELETE_ORPHANED", "Will be removed (manifest that don't belong to any manifest list or no platform manifests found for the manifest list)"},
+		{"KEEP_ORPHANED", "Kept: orphaned — no platform manifests found for digests in the manifest list"},
 	}
 
 	for r, rowData := range summaryRows {

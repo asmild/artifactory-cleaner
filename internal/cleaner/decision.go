@@ -169,7 +169,7 @@ func ComputeStats(decisions map[string][]CleanupDecision) CleanupStatistics {
 			stats.TotalArtifacts++
 			stats.TotalSize += d.Artifact.Size
 			switch d.CleanupAction {
-			case DELETE:
+			case DELETE, DELETE_ORPHANED:
 				stats.ArtifactsForDeletion++
 				stats.TotalSizeForDeletion += d.Artifact.Size
 			case WHITELISTED:
