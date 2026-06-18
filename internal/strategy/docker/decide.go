@@ -167,20 +167,22 @@ func applyManifestListDecisions(
 		foundCount, effectiveDownloadedAt := computeEffectiveDownload(imageDigests, manifestIndex)
 		rule := settings.MatchingRule(ml.Version)
 
-		mld := &cleaner.CleanupDecision{
-			Artifact:     ml,
-			RuleSettings: rule,
-		}
-
+		var action cleaner.CleanupAction
 		if foundCount == 0 {
 			if rule != nil && rule.DeleteOrphanedManifestsList {
-				mld.CleanupAction = cleaner.DELETE_ORPHANED
+				action = cleaner.DELETE_ORPHANED
 			} else {
-				mld.CleanupAction = cleaner.KEEP_ORPHANED
+				action = cleaner.KEEP_ORPHANED
 			}
 		} else {
 			ml.LastDownloadedAt = effectiveDownloadedAt
-			mld.CleanupAction = makeDecision(&ml, rule, settings)
+			action = makeDecision(&ml, rule, settings)
+		}
+
+		mld := &cleaner.CleanupDecision{
+			Artifact:      ml,
+			RuleSettings:  rule,
+			CleanupAction: action,
 		}
 
 		linkPlatformDecisions(imageDigests, manifestIndex, mld, decisions)
