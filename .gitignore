@@ -38,3 +38,4 @@ clean.log
 local.config.yaml
 reports
 .git.*
+dumps

@@ -20,6 +20,7 @@ var force bool
 var verbose bool
 var outputFile string
 var outputFormat string
+var deleteLimit int
 
 var allowedFormats = []string{"table", "csv", "html", "xlsx"}
 
@@ -71,7 +72,7 @@ Requires ARTIFACTORY_URL and ARTIFACTORY_TOKEN environment variables.`,
 			return err
 		}
 
-		plan, err := cleaner.NewCleanupPlan(ctx, target, cfgFile, dryRun, artClient, strat)
+		plan, err := cleaner.NewCleanupPlan(ctx, target, cfgFile, dryRun, artClient, strat, deleteLimit)
 		if err != nil {
 			return err
 		}
@@ -90,6 +91,7 @@ Requires ARTIFACTORY_URL and ARTIFACTORY_TOKEN environment variables.`,
 
 		if !force && !dryRun {
 			var confirm string
+
 			fmt.Print("Delete artifacts. Do you want to proceed? (y/n): ")
 			fmt.Scan(&confirm)
 			if confirm != "y" && confirm != "Y" {
@@ -121,6 +123,7 @@ func init() {
 	rootCmd.SilenceUsage = true
 	rootCmd.Flags().StringVar(&cfgFile, "config", "", "Cleanup config file (default: "+cleaner.ConfigFile+")")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Print what would be deleted without deleting")
+	rootCmd.Flags().IntVar(&deleteLimit, "delete-limit", 0, "Maximum number of artifacts to delete (0 = no limit)")
 	rootCmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 	rootCmd.Flags().BoolVar(&verbose, "verbose", false, "Print HTTP requests and responses (redacts auth token)")
 	rootCmd.Flags().StringP("target", "t", "", "Target repository key from the config file")
@@ -135,8 +138,13 @@ func validateArgs() {
 		fmt.Fprintf(os.Stderr, "invalid --format %q: allowed values are %v\n", outputFormat, allowedFormats)
 		os.Exit(1)
 	}
+
+	if deleteLimit > 0 {
+		fmt.Printf("Note: --delete-limit is set to %d, so no more than %d artifacts will be deleted.\n", deleteLimit, deleteLimit)
+	}
+
 	if dryRun {
-		fmt.Println("Dry-run mode: no artifacts will be deleted.")
+		fmt.Printf("\n>>> Dry-run mode: no artifacts will be deleted <<<\n\n")
 	}
 }
 

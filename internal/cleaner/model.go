@@ -3,6 +3,8 @@
 // concrete cleanup strategies live in internal/strategy/*.
 package cleaner
 
+import "regexp"
+
 import (
 	"context"
 	"time"
@@ -15,6 +17,7 @@ type CleanupPlan struct {
 	Repository         string
 	DryRun             bool
 	Stats              CleanupStatistics
+	DeleteLimit        int
 	GroupedDecisionMap map[string][]CleanupDecision
 	Timestamp          time.Time
 	artClient          Deleter
@@ -37,6 +40,7 @@ type CleanupStatistics struct {
 // CleanupDecision pairs an artifact with the action decided for it.
 type CleanupDecision struct {
 	CleanupAction CleanupAction
+	RuleSettings  *RuleSettings
 	Artifact      artifactory.Metadata
 }
 
@@ -50,11 +54,13 @@ const (
 	WHITELISTED                              // kept: in the matched rule's whitelist
 	MANIFEST_LIST_REF                        // kept: Docker platform image (sha256) referenced by a
 	//                                          retained manifest list; deleting it would break docker pull
-	PROTECTED       // kept: in target-level protectedVersions or protectedGroups — checked before rules
+	PROTECTED        // kept: in target-level protectedVersions or protectedGroups — checked before rules
 	CREATED_RECENTLY // kept: created within the rule's artifactLifetimeDays grace period; acts as a
 	//                  safety net for newly built artifacts that haven't been downloaded yet
-	UNMATCHED_KEEP // kept: no rule pattern matched, unmatchedAction is "keep"
-	DELETE         // removed: did not satisfy any keep condition
+	UNMATCHED_KEEP  // kept: no rule pattern matched, unmatchedAction is "keep"
+	KEEP_ORPHANED   // kept: no rule pattern matched, unmatchedAction is "keep"
+	DELETE_ORPHANED // removed: manifest list with no underlying platform manifests
+	DELETE          // removed: did not satisfy any keep condition
 )
 
 // CleanupActionStrings maps each action to its display label.
@@ -69,6 +75,8 @@ var CleanupActionStrings = map[CleanupAction]string{
 	MANIFEST_LIST_REF:   "KEEP_MANIFEST_LIST_REF",
 	UNMATCHED_KEEP:      "KEEP_UNMATCHED",
 	DELETE:              "DELETE",
+	DELETE_ORPHANED:     "DELETE_ORPHANED",
+	KEEP_ORPHANED:       "KEEP_ORPHANED",
 }
 
 // TargetSettings is the per-repository configuration from the config file.
@@ -77,12 +85,12 @@ type TargetSettings struct {
 	UnmatchedAction   string         `mapstructure:"unmatchedAction"`   // "keep" (default) | "delete"
 	ProtectedVersions []string       `mapstructure:"protectedVersions"` // immune to all rules, checked first
 	ProtectedGroups   []string       `mapstructure:"protectedGroups"`   // entire group immune to all rules
-	Concurrency       int            `mapstructure:"concurrency"` // parallel HTTP requests for manifest fetching (Docker); default 8
+	Concurrency       int            `mapstructure:"concurrency"`       // parallel HTTP requests for manifest fetching (Docker); default 8
 	Rules             []RuleSettings `mapstructure:"rules"`
 }
 
-// ManifestConcurrency returns the configured concurrency, or the default if unset.
-func (s TargetSettings) ManifestConcurrency() int {
+// GetConcurrency returns the configured concurrency, or the default if unset.
+func (s TargetSettings) GetConcurrency() int {
 	if s.Concurrency > 0 {
 		return s.Concurrency
 	}
@@ -91,16 +99,27 @@ func (s TargetSettings) ManifestConcurrency() int {
 
 // RuleSettings defines one retention rule within a target.
 type RuleSettings struct {
-	Name                    string   `mapstructure:"name"`
-	Pattern                 string   `mapstructure:"pattern"`                 // regexp matched against version
-	Discriminator           string   `mapstructure:"discriminator"`           // Maven/Generic: AQL filename filter
-	PathMatcher             string   `mapstructure:"pathMatcher"`             // Maven/Generic: AQL path filter
-	RecentArtifactRetention int      `mapstructure:"recentArtifactRetention"` // keep N most recent matches
-	LastDownloadedDays      int      `mapstructure:"lastDownloadedDays"`      // keep if downloaded within N days
-	ArtifactLifetimeDays    int      `mapstructure:"artifactLifetimeDays"`    // grace period: keep anything created within N days regardless of downloads
-	WhitelistedGroups       []string `mapstructure:"whitelistedGroups"`       // rule-scoped: only when pattern matched
-	WhitelistedVersions     []string `mapstructure:"whitelistedVersions"`
-	WhitelistedArtifacts    []string `mapstructure:"whitelistedArtifacts"`    // "group@version" pairs
+	Name                        string   `mapstructure:"name"`
+	Pattern                     string   `mapstructure:"pattern"`                 // regexp matched against version
+	Discriminator               string   `mapstructure:"discriminator"`           // Maven/Generic: AQL filename filter
+	PathMatcher                 string   `mapstructure:"pathMatcher"`             // Maven/Generic: AQL path filter
+	RecentArtifactRetention     int      `mapstructure:"recentArtifactRetention"` // keep N most recent matches
+	LastDownloadedDays          int      `mapstructure:"lastDownloadedDays"`      // keep if downloaded within N days
+	ArtifactLifetimeDays        int      `mapstructure:"artifactLifetimeDays"`    // grace period: keep anything created within N days regardless of downloads
+	WhitelistedGroups           []string `mapstructure:"whitelistedGroups"`       // rule-scoped: only when pattern matched
+	WhitelistedVersions         []string `mapstructure:"whitelistedVersions"`
+	WhitelistedArtifacts        []string `mapstructure:"whitelistedArtifacts"`        // "group@version" pairs
+	DeleteOrphanedManifestsList bool     `mapstructure:"deleteOrphanedManifestsList"` // Docker: delete manifest lists with no underlying platform manifests
+}
+
+// MatchingRule returns the first rule whose pattern matches the given version, or nil if none match.
+func (s TargetSettings) MatchingRule(version string) *RuleSettings {
+	for i := range s.Rules {
+		if matched, _ := regexp.MatchString(s.Rules[i].Pattern, version); matched {
+			return &s.Rules[i]
+		}
+	}
+	return nil
 }
 
 func (s TargetSettings) unmatchedIsDelete() bool {

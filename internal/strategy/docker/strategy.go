@@ -1,25 +1,16 @@
 // Package docker implements the Docker cleanup strategy.
-//
-// Two passes are run for each repository:
-//
-//  1. Multi-platform pass (list.manifest.json files):
-//     Retention decisions are driven by platform image pull statistics — the
-//     stat.downloaded of each manifest.json is used, not the manifest list's
-//     own stat, which is contaminated by the cleaner reading its content.
-//     See docs/docker-cleanup-flow.md for the full design rationale.
-//
-//  2. Standalone pass (manifest.json files, non-sha256 paths):
-//     Single-platform images not referenced by any manifest list, evaluated
-//     independently using their own retention rules and pull statistics.
 package docker
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/asmild/artifactory-cleaner/internal/artifactory"
 	"github.com/asmild/artifactory-cleaner/internal/cleaner"
 )
+
+// pending is an internal state used during the cleanup decision process to indicate that a manifest list or standalone manifest is still pending evaluation.
+// It is never visible in the final report.
+const pending cleaner.CleanupAction = -1
 
 // Strategy implements cleaner.Strategy for Docker repositories.
 type Strategy struct {
@@ -31,30 +22,46 @@ func New(client artifactory.Repository) *Strategy {
 	return &Strategy{client: client}
 }
 
-// Plan runs both passes and merges the results into a single grouped decision map.
+// Plan runs the full Docker cleanup strategy and returns a grouped decision map.
 func (s *Strategy) Plan(ctx context.Context, settings cleaner.TargetSettings) (map[string][]cleaner.CleanupDecision, error) {
-	fmt.Println("Pass 1 — multi-platform images (list.manifest.json)...")
-	multiPlatform, handledPaths, err := planMultiPlatform(ctx, s.client, settings)
+	repo := settings.Name
+	concurrency := settings.GetConcurrency()
+
+	manifestLists, manifestIndex, err := fetchMetadata(ctx, s.client, repo)
 	if err != nil {
-		return nil, fmt.Errorf("docker multi-platform pass: %w", err)
+		return nil, err
 	}
 
-	fmt.Println("Pass 2 — single-platform images (manifest.json)...")
-	standalone, err := planStandalone(ctx, s.client, settings, handledPaths)
+	decisions := make(map[string]*cleaner.CleanupDecision)
+
+	digestsByPath, err := fetchManifestListDigests(ctx, s.client, repo, manifestLists, concurrency)
 	if err != nil {
-		return nil, fmt.Errorf("docker standalone pass: %w", err)
+		return nil, err
 	}
 
-	return merge(multiPlatform, standalone), nil
+	// Step 1 - iterate over manifest lists
+	applyManifestListDecisions(manifestLists, digestsByPath, manifestIndex, decisions, &settings)
+
+	// Step 2 - iterate over all standalone manifests and make decisions for them.
+	applyStandaloneDecisions(manifestIndex, decisions, &settings)
+
+	// Step 3 - resolve retention counts for all pending entries.
+	// Both manifest lists and standalones share the same counter per (group, ruleName)
+	// so versions aren't double-counted across types for the same image.
+	resolveRetentionCounts(decisions)
+
+	// Propagate final action from manifest list to its platform manifests.
+	propagatePlatformDecisions(decisions)
+
+	if err = fetchAndApplySizes(ctx, s.client, repo, decisions, concurrency); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]cleaner.CleanupDecision)
+	for _, d := range decisions {
+		result[d.Artifact.Group] = append(result[d.Artifact.Group], *d)
+	}
+	return result, nil
 }
 
-func merge(a, b map[string][]cleaner.CleanupDecision) map[string][]cleaner.CleanupDecision {
-	result := make(map[string][]cleaner.CleanupDecision, len(a)+len(b))
-	for k, v := range a {
-		result[k] = append(result[k], v...)
-	}
-	for k, v := range b {
-		result[k] = append(result[k], v...)
-	}
-	return result
-}
+//1.5.2-master-SNAPSHOT
