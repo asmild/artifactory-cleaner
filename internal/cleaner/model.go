@@ -17,6 +17,7 @@ type CleanupPlan struct {
 	Repository         string
 	DryRun             bool
 	Stats              CleanupStatistics
+	DeleteLimit        int
 	GroupedDecisionMap map[string][]CleanupDecision
 	Timestamp          time.Time
 	artClient          Deleter

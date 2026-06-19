@@ -3,12 +3,14 @@ package cleaner
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
 )
 
 // NewCleanupPlan validates the target repo, runs the strategy, and returns a
 // CleanupPlan ready for reporting and execution.
-func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, artClient Deleter, strat Strategy) (CleanupPlan, error) {
+func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, artClient Deleter, strat Strategy, deleteLimit int) (CleanupPlan, error) {
 	var plan CleanupPlan
 
 	if cfgFile == "" {
@@ -34,9 +36,16 @@ func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, ar
 	fmt.Printf("\t- Unmatched action:    %s\n", unmatchedLabel(settings))
 	fmt.Printf("\t- Protected versions:  %v\n", settings.ProtectedVersions)
 	fmt.Printf("\t- Protected groups:    %v\n", settings.ProtectedGroups)
+	fmt.Printf("\t- Rules:\n")
 	for _, r := range settings.Rules {
-		fmt.Printf("\t- Rule %-20s pattern=%-40s retention=%d days=%d\n",
-			fmt.Sprintf("[%s]", r.Name), r.Pattern, r.RecentArtifactRetention, r.LastDownloadedDays)
+		fmt.Printf("\t   * Name: %s\n", r.Name)
+		val := reflect.ValueOf(r)
+		typeOfStruct := val.Type()
+		for i := 0; i < val.NumField(); i++ {
+			if typeOfStruct.Field(i).Name != "Name" {
+				fmt.Printf("\t     %s: %v\n", typeOfStruct.Field(i).Name, val.Field(i).Interface())
+			}
+		}
 	}
 
 	fmt.Println()
@@ -52,6 +61,7 @@ func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, ar
 	return CleanupPlan{
 		Repository:         settings.Name,
 		DryRun:             dryRun,
+		DeleteLimit:        deleteLimit,
 		Stats:              stats,
 		GroupedDecisionMap: decisionMap,
 		Timestamp:          time.Now(),
@@ -61,20 +71,36 @@ func NewCleanupPlan(ctx context.Context, target, cfgFile string, dryRun bool, ar
 
 // Execute carries out the planned deletions (or prints them if DryRun is set).
 func (cp *CleanupPlan) Execute(ctx context.Context) error {
+	artifactsCount := 0
+
 	for _, decisions := range cp.GroupedDecisionMap {
 		for _, decision := range decisions {
 			if decision.CleanupAction != DELETE && decision.CleanupAction != DELETE_ORPHANED {
 				continue
 			}
+
+			var s []string
+			artifactsCount++
+
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			meta := decision.Artifact
 			fmt.Printf("Deleting %s (%s)... ", meta.Path, formatSize(meta.Size))
+
 			if cp.DryRun {
-				fmt.Println("skipped (dry-run).")
+				s = append(s, "dry-run")
+			}
+
+			if cp.DeleteLimit != 0 && cp.DeleteLimit < artifactsCount {
+				s = append(s, "deletion limit-reached")
+			}
+
+			if len(s) > 0 {
+				fmt.Println("skipped (" + strings.Join(s, ", ") + ").")
 				continue
 			}
+
 			if err := cp.artClient.DeletePath(ctx, cp.Repository, meta.Path); err != nil {
 				return err
 			}
